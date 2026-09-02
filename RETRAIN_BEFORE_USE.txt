@@ -1,0 +1,3 @@
+MODELS ARE ALREADY TRAINED FOR THE INCLUDED DATASET.
+
+Run train_models.py only if you modify or regenerate the dataset.

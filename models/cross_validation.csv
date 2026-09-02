@@ -1,0 +1,4 @@
+Model,Mean_R2,Std
+Random Forest,0.856,0.0073
+Gradient Boosting,0.9011,0.0024
+XGBoost,0.9003,0.0034
