@@ -1,16 +1,24 @@
 # Lumina Nest
 
-## AI-Powered House Renovation Budget Planner
+## AI-Powered House Renovation Budget Planner and Smart Material Recommendation System
 
-Lumina Nest is an AI-powered house renovation planning system that helps users estimate:
+Lumina Nest is an AI-powered house renovation planning system developed to help users estimate renovation costs, labour costs, and project duration based on house details and renovation requirements.
 
-- Renovation Cost
-- Labour Cost
-- Renovation Duration
+## Features
 
-The system supports interactive renovation planning based on the user's selected renovation requirements.
+- User Registration and Login
+- Renovation Cost Prediction
+- Labour Cost Estimation
+- Renovation Duration Prediction
+- Support for Multiple Renovation Types
+- Smart Material Recommendations
+- Material Price Comparison
+- Budget Optimization
+- Explainable AI-Based Predictions
+- Location-Based Material Planning
+- PDF Report Generation
 
-## Renovation Types
+## Supported Renovation Types
 
 1. Full House Renovation
 2. Interior Renovation
@@ -18,7 +26,7 @@ The system supports interactive renovation planning based on the user's selected
 4. Kitchen Renovation
 5. Bathroom Renovation
 6. Painting
-7. Flooring & Tiling
+7. Flooring and Tiling
 8. Roofing
 9. Plumbing
 10. Electrical Work
@@ -32,59 +40,48 @@ The system supports interactive renovation planning based on the user's selected
 - Scikit-learn
 - XGBoost
 - Plotly
-- Folium
-- OpenPyXL
+- SHAP
 - ReportLab
 
-## Main Features
+## Machine Learning Models
 
-- Interactive Renovation Planning
-- Renovation Cost Prediction
-- Labour Cost Prediction
-- Duration Prediction
-- Renovation-Specific Requirements
-- Full House Work Selection
-- Material Planning
-- Location and Map Support
-- Data Visualization
-- PDF Report Generation
-- User Authentication
+The system uses machine learning models for predicting:
 
-## How to Run
+- Estimated Renovation Cost
+- Estimated Labour Cost
+- Estimated Duration
 
-Install the required dependencies:
+Models used include:
 
-```bash
-pip install -r requirements.txt
-```
-
-Run the application:
-
-```bash
-python -m streamlit run dashboard.py
-```
-
-The application will open in your web browser.
+- Random Forest Regressor
+- Gradient Boosting Regressor
+- XGBoost Regressor
 
 ## Project Structure
 
 ```text
-house_renovation/
-├── dataset/
-├── models/
-├── modules/
-├── services/
-├── static/
-├── utils/
-├── auth.py
-├── config.py
-├── dashboard.py
+Lumina_Nest/
+│
+├── auth_page/          # Authentication pages
+├── dataset/            # Renovation dataset
+├── models/             # Trained ML models
+├── modules/            # Application modules
+├── services/           # Supporting services
+├── static/             # Static files
+├── utils/              # Utility functions
+│
+├── auth.py             # Authentication logic
+├── config.py           # Configuration
+├── dashboard.py        # Main Streamlit application
 ├── dataset_generator.py
+├── model_evaluation.py
 ├── train_models.py
 ├── requirements.txt
 └── README.md
-```
+# Lumina Nest renovation planner
 
-## Project Objective
+Run `pip install -r requirements.txt` and then `streamlit run dashboard.py` from this folder.
 
-The objective of Lumina Nest is to provide a real-world interactive AI renovation planning system that helps users understand renovation requirements, estimate costs, plan materials, and make better renovation decisions.
+All application data is stored in `users.json`: users, projects, estimates, expenses, contractor quotes and password-reset verification records. No SQLite database is used.
+
+The planning estimate is preliminary only. Confirm material rates, site conditions, contractor quotes and final logistics before committing work.

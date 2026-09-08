@@ -44,7 +44,7 @@ def show_comparison(selected_quality, budget_status, difference, material_names=
         text="Reference market rate (INR)", hover_data={"Brand / supplier": True},
     )
     chart.update_layout(showlegend=False, height=260, margin=dict(l=10, r=10, t=10, b=10))
-    st.plotly_chart(chart, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(chart, width='stretch', config={"displayModeBar": False})
 
     rows = []
     for q, (brand, rate, life) in options.items():
@@ -55,7 +55,7 @@ def show_comparison(selected_quality, budget_status, difference, material_names=
             "Typical service life": life,
             "Decision": "Current estimate" if q == selected_quality else "Alternative",
         })
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
     st.info(f"**Planning note for {material}:** {MATERIAL_LIFESPAN_NOTES.get(material, 'Typical planning range only.')}")
     st.caption("Reference market rates are planning values, not live quotations. Confirm local supplier price and product availability before purchase.")
 
@@ -69,7 +69,14 @@ def show_recommendation(selected_quality, budget_status, difference, material_de
     a, b, c = st.columns(3)
     a.metric("Estimate quality used", selected_quality)
     b.metric("Suggested alternative", recommended)
-    c.metric("Recommended material categories", len(details))
+    budget = float(st.session_state.get("project", {}).get("budget") or 0)
+    if budget > 0 and budget_status == "Over Budget":
+        c.metric("Budget gap", f"INR {difference:,.0f}", "above available budget")
+    elif budget > 0:
+        material_balance = max(0, budget - current_cost)
+        c.metric("Material balance", f"INR {material_balance:,.0f}", "budget left after required materials")
+    else:
+        c.metric("Required materials", len(details))
 
     if recommended != selected_quality:
         st.info(
@@ -86,6 +93,10 @@ def show_recommendation(selected_quality, budget_status, difference, material_de
             continue
         brand, rate, life = MATERIAL_OPTIONS[material][selected_quality]
         alt_brand, alt_rate, _ = MATERIAL_OPTIONS[material][recommended]
+        quantity = float(item.get("Estimated quantity", 0) or 0)
+        alt_match = re.search(r"\d+(?:\.\d+)?", alt_rate.replace(",", ""))
+        alternative_cost = quantity * float(alt_match.group()) if alt_match else 0
+        current = float(item.get("Estimated material cost (INR)", 0) or 0)
         rows.append({
             "Material": material,
             "Used for": item.get("Why included", "Required renovation work"),
@@ -93,6 +104,7 @@ def show_recommendation(selected_quality, budget_status, difference, material_de
             "Quality used": selected_quality,
             "Rate used for estimate": item.get("Reference market rate", rate),
             "Estimated cost (INR)": round(float(item.get("Estimated material cost (INR)", 0) or 0)),
+            "Possible saving (INR)": max(0, round(current - alternative_cost)),
             "Typical service life": life,
             "Alternative": f"{recommended}: {alt_brand} ({alt_rate})" if recommended != selected_quality else "Current plan",
         })
@@ -100,9 +112,12 @@ def show_recommendation(selected_quality, budget_status, difference, material_de
     if rows:
         st.subheader("Materials required for your selected work")
         st.dataframe(
-            pd.DataFrame(rows).style.format({"Estimated cost (INR)": "INR {:,.0f}"}),
-            hide_index=True, use_container_width=True,
+            pd.DataFrame(rows).style.format({"Estimated cost (INR)": "INR {:,.0f}", "Possible saving (INR)": "INR {:,.0f}"}),
+            hide_index=True, width='stretch',
         )
+        savings = sum(row["Possible saving (INR)"] for row in rows)
+        if savings:
+            st.success(f"Total possible savings with the displayed alternatives: INR {savings:,.0f}. Review quality and warranty before switching.")
         st.caption(
             "The rate shown in this table is the same planning rate used to calculate the displayed quantity and material cost. "
             "Service-life ranges are planning estimates, not warranties."
@@ -111,10 +126,9 @@ def show_recommendation(selected_quality, budget_status, difference, material_de
         st.info("No matching material information is available.")
 
     if budget_status == "Over Budget":
-        st.warning(f"The project is INR {difference:,.0f} above budget. Compare alternatives, but do not reduce safety-critical work solely to meet the budget.")
+        st.warning(f"**Budget gap: INR {difference:,.0f}.** The complete estimate is above the available budget. Compare material alternatives, but do not reduce safety-critical work just to close the gap.")
     else:
-        reserve = max(0, difference)
-        st.success(f"Budget reserve: INR {reserve:,.0f}. Keep a contingency before choosing upgrades.")
+        st.success(f"**Material balance: INR {max(0, budget - current_cost):,.0f}.** This is the available budget left after the required materials shown above; the final estimate still includes labour, transport and contingency.")
 
 
 def show(selected_quality, budget_status, difference):

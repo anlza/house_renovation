@@ -25,6 +25,7 @@ h1 { font-size: 2.08rem !important; line-height: 1.16; font-weight: 720 !importa
 h2 { font-weight: 680 !important; }
 h3 { font-weight: 650 !important; }
 p, .stCaption { color: var(--muted) !important; }
+.stCaption { font-size: .88rem !important; line-height: 1.55 !important; }
 
 /* Inputs and buttons reflect the reference's understated contrast */
 .stButton > button { min-height: 42px; border-radius: 7px; background: transparent; color: var(--text); border: 1px solid var(--line-strong); font-weight: 600; box-shadow: none; transition: all .15s ease; }
@@ -48,6 +49,7 @@ label, [data-testid="stWidgetLabel"] p { color: #e2e7ef !important; font-weight:
 [data-testid="stDataFrame"] { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 [data-testid="stPlotlyChart"] { background: rgba(25,36,58,.72); border: 1px solid var(--line); border-radius: 12px; padding: .25rem .45rem; }
 [data-testid="stAlert"] { border-radius: 8px; }
+[data-testid="stAlert"] p { color: inherit !important; line-height: 1.5; }
 hr { border-color: var(--line); }
 
 /* Refined result-page hierarchy */
@@ -71,6 +73,16 @@ hr { border-color: var(--line); }
 .app-hero h2 { margin: 0 0 .32rem !important; font-size: 1.42rem !important; }
 .app-hero p { margin: 0; font-size: .98rem; max-width: 680px; }
 .section-note { color: var(--muted); margin-top: -.45rem; margin-bottom: .9rem; }
+.section-title { display: flex; align-items: center; gap: .65rem; margin: 1.5rem 0 .25rem; color: var(--ink); font-size: 1.25rem; font-weight: 700; letter-spacing: -.02em; }
+.section-title span { display: grid; place-items: center; width: 29px; height: 29px; border-radius: 9px; color: #cde5fb; background: linear-gradient(135deg, #315b88, #24405f); font-size: .92rem; }
+.eyebrow { color: #8cbde4 !important; text-transform: uppercase; letter-spacing: .11em; font-size: .72rem; font-weight: 720; margin-bottom: .3rem; }
+.planning-callout { margin: .8rem 0 1.25rem; padding: .82rem 1rem; border: 1px solid rgba(101,164,212,.32); border-radius: 10px; background: linear-gradient(100deg, rgba(47,93,137,.24), rgba(25,36,58,.42)); color: #cfdae8; font-size: .91rem; line-height: 1.55; }
+.planning-callout strong { color: #fff; }
+.result-banner { margin: .3rem 0 1.15rem; padding: 1rem 1.15rem; border-radius: 12px; border: 1px solid rgba(110,198,164,.28); background: linear-gradient(115deg, rgba(40,110,91,.24), rgba(25,36,58,.78)); }
+.result-banner .label { color: #9edbbb; text-transform: uppercase; letter-spacing: .09em; font-weight: 700; font-size: .7rem; }
+.result-banner .value { color: #f5f8fb; margin-top: .15rem; font-size: 1.13rem; font-weight: 700; }
+.result-banner .sub { color: #c3d0df; margin-top: .18rem; font-size: .87rem; }
+.stProgress > div > div > div { background: linear-gradient(90deg, #3d7db5, #6ec6a4); }
 .auth-brand { text-align: center; margin: 2.25rem 0 1.55rem; }
 .auth-brand h1 { margin-bottom: .45rem !important; color: var(--ink); font-size: 2.28rem !important; }
 .auth-brand h1::before { content: "🏠"; font-size: 2.05rem; margin-right: .6rem; vertical-align: .05em; }

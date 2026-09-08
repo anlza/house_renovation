@@ -33,7 +33,7 @@ if not st.session_state.logged_in:
 def _navigate(label, destination, icon, reset_estimate=False):
     """Render one sidebar item, with the current page visibly selected."""
     active = st.session_state.page == destination
-    if st.button(f"{icon}  {label}", type="primary" if active else "secondary", use_container_width=True):
+    if st.button(f"{icon}  {label}", type="primary" if active else "secondary", width='stretch'):
         if reset_estimate:
             st.session_state.flow_step = 1
             st.session_state.project = {}
@@ -51,6 +51,9 @@ with st.sidebar:
     st.write(f"Signed in as **{st.session_state.username.title()}**")
     _navigate("Overview", "home", "◈")
     _navigate("New estimate", "prediction", "＋", reset_estimate=True)
+    _navigate("My projects", "projects", "◫")
+    _navigate("Expense tracking", "expenses", "◷")
+    _navigate("Contractor quotes", "quotes", "⚖")
     st.caption("YOUR PLAN")
     _navigate("Estimate summary", "results", "▣")
     with st.expander("More details"):
@@ -62,7 +65,7 @@ with st.sidebar:
         _navigate("PDF report", "report", "⇩")
         _navigate("History", "history", "↺")
     st.divider()
-    if st.button("Log out", use_container_width=True):
+    if st.button("Log out", width='stretch'):
         for key in list(st.session_state):
             del st.session_state[key]
         for key, value in DEFAULTS.items():
@@ -87,5 +90,11 @@ elif st.session_state.page == "report":
     show_results("report")
 elif st.session_state.page == "history":
     show_results("history")
+elif st.session_state.page == "projects":
+    show_results("projects")
+elif st.session_state.page == "expenses":
+    show_results("expenses")
+elif st.session_state.page == "quotes":
+    show_results("quotes")
 else:
     home_page()

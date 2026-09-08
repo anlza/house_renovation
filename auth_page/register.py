@@ -24,7 +24,7 @@ def show_register():
             password = st.text_input("Password", type="password", placeholder="Create a password", key="reg_password")
             confirm_password = st.text_input("Confirm password", type="password", placeholder="Confirm your password", key="reg_confirm")
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("Create account", type="primary", use_container_width=True, key="create_account_btn"):
+            if st.button("Create account", type="primary", width='stretch', key="create_account_btn"):
                 if not full_name.strip():
                     st.error("Please enter your full name.")
                 elif not username.strip():
@@ -41,6 +41,6 @@ def show_register():
                     else:
                         st.error(message)
             st.divider()
-            if st.button("Back to sign in", use_container_width=True, key="goto_login"):
+            if st.button("Back to sign in", width='stretch', key="goto_login"):
                 st.session_state.auth_page = "login"
                 st.rerun()

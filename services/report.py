@@ -38,8 +38,9 @@ def create_project_pdf(report, breakdown, status, difference, recommended_qualit
         y -= 22
     lines.extend([
         "0.75 G 48 438 m 547 438 l S",
-        _line("TOTAL ESTIMATED COST", 54, 417, 12, True, "0.08 0.15 0.30"),
+        _line("TOTAL ESTIMATED BUDGET", 54, 417, 12, True, "0.08 0.15 0.30"),
         _line(f"INR {report['Total Cost']:,.0f}", 410, 417, 12, True, "0.08 0.15 0.30"),
+        _line(f"Expected range: INR {report['Total Cost']*.90:,.0f} - INR {report['Total Cost']*1.10:,.0f}", 54, 396, 9),
         _line("BUDGET CHECK", 48, 372, 12, True, "0.08 0.15 0.30"),
     ])
     message = (f"Within budget: you may have INR {difference:,.0f} remaining."
@@ -50,7 +51,7 @@ def create_project_pdf(report, breakdown, status, difference, recommended_qualit
         _line("RECOMMENDED MATERIAL PLAN", 48, 290, 12, True, "0.08 0.15 0.30"),
         _line(f"Suggested quality: {recommended_quality}", 54, 268, 10, True),
         _line("PROJECT TIPS", 48, 230, 12, True, "0.08 0.15 0.30"),
-        _line("Helpful note: these are planning estimates. Confirm final rates with local contractors.", 48, 74, 9, False, "0.35 0.40 0.48"),
+        _line("Preliminary estimate only: site conditions, market prices, contractor charges and availability may vary.", 48, 74, 8, False, "0.35 0.40 0.48"),
     ])
     tip_y = 208
     for suggestion in suggestions[:3]:
@@ -81,7 +82,7 @@ def create_project_pdf(report, breakdown, status, difference, recommended_qualit
     chart_lines.extend([
         _line("BUDGET DECISION", 48, 318, 13, True, "0.08 0.15 0.30"),
         _line(status, 48, 293, 12, True, "0.08 0.45 0.20" if status == "Within Budget" else "0.72 0.13 0.13"),
-        _line(f"Total estimated cost: INR {report['Total Cost']:,.0f}", 48, 270, 11),
+        _line(f"Total estimated budget: INR {report['Total Cost']:,.0f}", 48, 270, 11),
         _line(f"Available budget: INR {report['Available Budget']:,.0f}", 48, 250, 11),
         _line("Prepared by Lumina Nest · Confirm final rates with local contractors.", 48, 74, 9, False, "0.35 0.40 0.48"),
     ])

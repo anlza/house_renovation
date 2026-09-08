@@ -15,7 +15,10 @@ from config import (BASE_PRICES, MODEL_RENOVATION_MAP, QUALITY_FACTORS,
 from modules.material import show_comparison, show_recommendation
 from services.recommendations import MATERIAL_OPTIONS, project_suggestions, suggested_quality
 from services.report import create_project_pdf
-from auth import get_prediction_history, save_prediction_history
+from services.material_engine import calculate_materials
+from services.work_requirements import fields_for, FULL_COMPONENT_TO_WORK
+from auth import (add_expense, add_quote, create_project, get_expenses, get_prediction_history,
+                  get_projects, get_quotes, save_prediction_history)
 from utils.encoder import encode_input
 from utils.model_loader import load_models
 from utils.predictor import predict
@@ -71,7 +74,21 @@ MATERIAL_WEIGHT_KG = {
     "Electrical Cable": 0.6, "Switches & Sockets": 0.2, "MCB & Conduit": 0.5,
     "PVC/CPVC Pipes": 0.8, "Plumbing Fittings": 0.7, "Sanitary Fixtures": 35,
 }
-VEHICLE_RATES = {"Mini truck": 18, "Pickup": 22, "Medium truck": 30, "Large truck": 40}
+# Planning consumption per sq ft of work. Quantities are derived from scope,
+# not by dividing an AI cost by a retail rate. Wastage is added separately.
+MATERIAL_REQUIREMENT_PER_SQFT = {
+    "Cement": .12, "Steel": .35, "Sand": .30, "Brick": 2.5, "Paint": .10,
+    "Primer": .025, "Putty": .12, "Tiles": 1.0, "Tile Adhesive": .30,
+    "Wood": .35, "Countertop": .12, "Waterproofing": 1.0, "Electrical Cable": .35,
+    "Switches & Sockets": .04, "MCB & Conduit": .03, "PVC/CPVC Pipes": .12,
+    "Plumbing Fittings": .03, "Sanitary Fixtures": .01,
+}
+WASTAGE_RATE = .08
+VEHICLE_SPECS = {
+    "Mini truck": {"capacity": 1000, "mileage": 12}, "Pickup": {"capacity": 3500, "mileage": 10},
+    "Medium truck": {"capacity": 10000, "mileage": 7}, "Large truck": {"capacity": 18000, "mileage": 5},
+}
+FUEL_PRICE_PER_LITRE = 105
 STATE_MAP_CENTERS = {
     "Kerala": [10.25, 76.35], "Karnataka": [15.32, 75.71],
     "Tamil Nadu": [11.13, 78.66], "Telangana": [18.11, 79.02],
@@ -227,11 +244,84 @@ def _init():
         st.session_state.setdefault(key, value)
 
 
+FIELD_HELP = {
+    "house_rooms": "Total rooms currently in the house. This is used only as background information for planning; it is not the number of rooms being renovated.",
+    "house_bathrooms": "Total bathrooms currently in the house. For a bathroom renovation, the next step asks for the actual bathroom work area.",
+    "house_area": "Enter the existing total floor area of the house, not just the area being renovated.",
+    "req_work_area": "Enter only the area that will actually be renovated. If you are unsure, use the approximate measured area.",
+    "req_flooring_area": "Measure the floor area where new flooring/tiles will be installed. You do not need to calculate tile pieces yourself.",
+    "req_tile_quality": "Choose the quality level you want to budget for. Economy = lower-cost, Standard = balanced, Premium = higher-end.",
+}
+
 def _field(label, key, values):
+    help_text = FIELD_HELP.get(key)
     if isinstance(values, list):
-        st.selectbox(label, values, index=None, placeholder="Select an option", key=key)
+        st.selectbox(label, values, index=None, placeholder="Select an option", key=key, help=help_text)
     else:
-        st.number_input(label, min_value=values, value=None, step=1, placeholder="Enter a value", key=key)
+        st.number_input(label, min_value=values, value=None, step=1, placeholder="Enter a value", key=key, help=help_text)
+
+
+def _work_specific_inputs(renovation):
+    """Render optional measurements/points that drive the material engine."""
+    details = fields_for(renovation)
+    if not details:
+        return
+    st.markdown("#### Work-specific measurements")
+    if renovation == "Flooring & Tiling":
+        st.info("💡 Tile quantity is calculated automatically from the renovation work area, including the standard 8% wastage allowance. You do not need to choose a tile size or count tile pieces.")
+    st.caption("These measurements drive the material quantities. Leave an item at zero only when that work is not included.")
+    for label, field, kind, values in details:
+        widget = f"detail_{field}"
+        prior = st.session_state.project.get(field)
+        if kind == "multi":
+            selected = st.multiselect(label, values, default=prior or [], key=widget)
+            st.session_state.project[field] = selected
+        elif kind == "select":
+            options = ["Not specified"] + values
+            value = st.selectbox(label, options, index=options.index(prior) if prior in options else 0, key=widget)
+            st.session_state.project[field] = None if value == "Not specified" else value
+        else:
+            value = st.number_input(label, min_value=0.0, value=float(prior or 0), step=1.0, key=widget)
+            st.session_state.project[field] = value
+
+
+def _number(value):
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _work_specific_valid(renovation, project):
+    """Prevent area-only estimates for inherently point/length based work."""
+    required = {
+        "Plumbing": "plumbing_work",
+        "Electrical Work": "electrical_work",
+    }
+    if renovation == "Full House Renovation":
+        for component in project.get("full_scope", []):
+            work = FULL_COMPONENT_TO_WORK.get(component)
+            if work in required and not project.get(required[work]):
+                return False, f"Choose the specific {work.lower()} work before continuing."
+            if work in {"Plumbing", "Electrical Work"}:
+                valid, message = _work_specific_valid(work, project)
+                if not valid:
+                    return valid, message
+        return True, ""
+    key = required.get(renovation)
+    if key and not project.get(key):
+        return False, f"Choose the specific {renovation.lower()} work before continuing."
+    if renovation == "Plumbing":
+        works = set(project.get("plumbing_work") or [])
+        if works - {"Leakage repair"} and _number(project.get("pipe_length_m")) <= 0:
+            return False, "Enter the pipe length required for the selected plumbing work."
+        if works == {"Leakage repair"} and _number(project.get("leakage_points")) <= 0:
+            return False, "Enter the number of leakage points."
+    if renovation == "Electrical Work":
+        total = sum(_number(project.get(name)) for name in ("rewiring_length_m", "switch_points", "socket_points", "light_points", "fan_points"))
+        if total <= 0 and "Distribution board" not in set(project.get("electrical_work") or []):
+            return False, "Enter the cable length or number of electrical points for the selected work."
+    return True, ""
 
 
 def _restore(mapping):
@@ -254,7 +344,8 @@ def _house_details_page():
     fields = {key: f"house_{key}" for _, key, _ in HOUSE_DETAILS}
     _restore(fields)
     st.subheader("Current house details")
-    st.caption("Enter details of your existing house. These are the current values, not the values you want after renovation.")
+    st.caption("Enter your existing house details. These values help the planner understand the house; they are not the work area.")
+    st.info("💡 **Quick guide:** Number of rooms and bathrooms means the total count in the existing house. You do not have to decide which rooms to renovate here—the renovation-specific step will ask that separately.")
     for label, key, values in HOUSE_DETAILS:
         _field(label, fields[key], values)
     return fields
@@ -292,15 +383,17 @@ def _requirements_page():
             for label, key, values in component_fields:
                 _field(label, mapping[key], values)
             fields.update(mapping)
+            _work_specific_inputs(FULL_COMPONENT_TO_WORK.get(component, component))
         return fields
 
     fields = {key: f"req_{key}" for _, key, _ in REQUIREMENTS[renovation]}
     _restore(fields)
-    st.caption("Work area means only the part of the house included in this renovation.")
+    st.caption("Work area means only the part of the house included in this renovation. **You do not need to calculate tile pieces yourself; the planner estimates material quantities from the work area and selected quality.**")
     if renovation == "Kitchen Renovation":
         st.info("Existing kitchen items are recorded for context. Only new countertop and cupboard work is added to the renovation scope.")
     for label, key, values in REQUIREMENTS[renovation]:
         _field(label, fields[key], values)
+    _work_specific_inputs(renovation)
     return fields
 
 
@@ -531,14 +624,14 @@ def _location_preview(location, kind):
 
     c1, c2 = st.columns(2)
     with c1:
-        if st.button(f"✅ Confirm this {label.lower()}", key=confirm_key, type="primary", use_container_width=True):
+        if st.button(f"✅ Confirm this {label.lower()}", key=confirm_key, type="primary", width='stretch'):
             if is_work:
                 _set_work_site(location)
             else:
                 _set_material_site(location)
             st.rerun()
     with c2:
-        if st.button("↩️ Choose again", key=cancel_key, use_container_width=True):
+        if st.button("↩️ Choose again", key=cancel_key, width='stretch'):
             _clear_pending_location(kind)
             st.rerun()
     return True
@@ -560,7 +653,7 @@ def _render_location_search(kind, title, help_text, default_query=""):
         submitted = st.form_submit_button(
             "🔍 Search location",
             type="primary",
-            use_container_width=True,
+            width='stretch',
         )
 
     if submitted:
@@ -592,7 +685,7 @@ def _location_page():
             label_visibility="collapsed",
         )
     with c2:
-        search_clicked = st.button("Search", type="primary", use_container_width=True, key="work_exact_search_btn")
+        search_clicked = st.button("Search", type="primary", width='stretch', key="work_exact_search_btn")
 
     if search_clicked:
         results = _search_location(query)
@@ -614,7 +707,7 @@ def _location_page():
             "Search results", range(len(labels)), format_func=lambda i: labels[i],
             key="work_search_result_choice",
         )
-        if st.button("Use selected result", use_container_width=True, key="use_work_search_result"):
+        if st.button("Use selected result", width='stretch', key="use_work_search_result"):
             location = _location_from_search_result(results[selected_index])
             if location:
                 _set_pending_location("work", location)
@@ -642,7 +735,7 @@ def _location_page():
         map_data = st_folium(
             work_map,
             height=390,
-            use_container_width=True,
+            width='stretch',
             returned_objects=["last_clicked"],
             key="work_site_exact_map",
         )
@@ -675,11 +768,11 @@ def _location_page():
         st.info("💡 Please verify the location above. Confirm this work-site only if this is the exact location.")
         left, right = st.columns([1, 1])
         with left:
-            if st.button("↻ Choose Again", use_container_width=True, key="choose_work_again"):
+            if st.button("↻ Choose Again", width='stretch', key="choose_work_again"):
                 _clear_pending_location("work")
                 st.rerun()
         with right:
-            if st.button("✓ Confirm this Work-Site", type="primary", use_container_width=True, key="confirm_work_exact"):
+            if st.button("✓ Confirm this Work-Site", type="primary", width='stretch', key="confirm_work_exact"):
                 _set_work_site(pending_work)
                 st.rerun()
     elif work_site:
@@ -714,7 +807,7 @@ def _material_supplier_location_picker():
             label_visibility="collapsed",
         )
     with c2:
-        search_clicked = st.button("Search", type="primary", use_container_width=True, key="supplier_exact_search_btn")
+        search_clicked = st.button("Search", type="primary", width='stretch', key="supplier_exact_search_btn")
 
     if search_clicked:
         results = _search_location(query)
@@ -734,7 +827,7 @@ def _material_supplier_location_picker():
             "Supplier search results", range(len(labels)),
             format_func=lambda i: labels[i], key="material_search_result_choice",
         )
-        if st.button("Use selected supplier result", use_container_width=True, key="use_material_search_result"):
+        if st.button("Use selected supplier result", width='stretch', key="use_material_search_result"):
             location = _location_from_search_result(results[selected_index])
             if location:
                 _set_pending_location("material", location)
@@ -765,7 +858,7 @@ def _material_supplier_location_picker():
             ).add_to(supplier_map)
 
         map_data = st_folium(
-            supplier_map, height=330, use_container_width=True,
+            supplier_map, height=330, width='stretch',
             returned_objects=["last_clicked"], key="material_supplier_exact_map",
         )
         clicked = map_data.get("last_clicked") if map_data else None
@@ -792,11 +885,11 @@ def _material_supplier_location_picker():
         c.metric("Region Type", pending.get("region", "Not found"))
         left, right = st.columns(2)
         with left:
-            if st.button("↻ Choose Supplier Again", use_container_width=True, key="choose_supplier_again"):
+            if st.button("↻ Choose Supplier Again", width='stretch', key="choose_supplier_again"):
                 _clear_pending_location("material")
                 st.rerun()
         with right:
-            if st.button("✓ Confirm this Material Supplier", type="primary", use_container_width=True, key="confirm_supplier_exact"):
+            if st.button("✓ Confirm this Material Supplier", type="primary", width='stretch', key="confirm_supplier_exact"):
                 _set_material_site(pending)
                 st.rerun()
     elif supplier:
@@ -816,11 +909,15 @@ def _logistics_page():
     fields = {"material": "material_quality", "quality": "finish_quality", "season": "season", "budget": "user_budget"}
     _restore(fields)
     st.subheader("Transportation and budget review")
-    st.info("Transportation cost will be calculated automatically from your region and the predicted material quantity and weight. You do not need to enter units, weight or vehicle details.")
+    st.info("Transportation uses the supplier-to-site distance, vehicle mileage and fuel price. Material quantities use work area, requirement rates and an 8% wastage allowance.")
     st.selectbox("Material quality", ["Economy", "Standard", "Premium"], index=None, placeholder="Select quality", key="material_quality")
     st.selectbox("Finish quality", list(QUALITY_FACTORS), index=None, placeholder="Select quality", key="finish_quality")
     st.selectbox("Work season", ["Summer", "Monsoon", "Winter"], index=None, placeholder="Select season", key="season")
     st.number_input("Available budget (INR)", min_value=1.0, value=None, step=1000.0, placeholder="Enter your budget", key="user_budget")
+    # A 10% contingency is included automatically so users do not need to choose it.
+    # It is a planning reserve for unexpected renovation expenses.
+    st.session_state["contingency_rate"] = 10
+    st.info("💡 **Contingency reserve (10%)** is automatically added to your estimate. It is a safety amount kept aside for unexpected costs such as minor repairs, price changes or extra work. You do not need to select anything.")
     return fields
 
 
@@ -999,38 +1096,33 @@ def _run(project):
     forecast = predict(models, encoded)
 
     scope_factor, scope_explanation = _additional_scope_factor(project)
-    renovation_cost = forecast["cost"] * scope_factor
+    # Keep the trained model output as a reference, while the displayed core
+    # material cost is now calculated from physical work quantities below.
+    ml_core_reference = forecast["cost"] * scope_factor
     labour_cost = forecast["labour"] * scope_factor
-
-    # Material shares distribute the already scoped AI estimate. They must not
-    # be used as a second multiplier, otherwise selecting fewer material types
-    # would incorrectly reduce the project cost twice.
-    shares = _required_materials(project)
 
     material_detail = []
     total_weight = 0
     selected_material_quality = project["material"]
-
-    # The same catalogue rate is used for quantity and displayed material cost.
-    # This removes the previous inconsistency where a table could show one rate
-    # but calculate cost using a different base rate.
-    for name, share in shares.items():
-        amount = renovation_cost * share
+    core_renovation_cost = 0
+    # Physical quantities are calculated from actual area, length or points.
+    # No percentage of the AI cost is used to reverse-calculate quantities.
+    for requirement in calculate_materials(project):
+        name = requirement["Material"]
         rate, brand, rate_text, lifespan = _catalog_rate(name, selected_material_quality)
-        quantity = amount / max(rate, 1)
+        quantity = requirement["Estimated quantity"]
+        amount = quantity * rate
+        core_renovation_cost += amount
         weight = quantity * MATERIAL_WEIGHT_KG.get(name, 1)
         total_weight += weight
-        if project["renovation"] == "Full House Renovation":
-            used_by = [component for component in project.get("full_scope", []) if name in FULL_SCOPE_PROFILES.get(component, {})]
-            purpose = "Required for: " + ", ".join(used_by) if used_by else "Required renovation material"
-        else:
-            purpose = MATERIAL_PURPOSES.get(project["renovation"], {}).get(name, "Required renovation material")
         material_detail.append({
             "Material": name,
-            "Why included": purpose,
+            "Why included": requirement["Why included"],
             "Recommended brand / company": brand,
+            "Base quantity": round(requirement["Base quantity"], 2),
+            "Wastage": f"{requirement['Wastage rate']:.0%}",
             "Estimated quantity": round(quantity, 1),
-            "Unit": rate_text.split(" / ", 1)[-1] if " / " in rate_text else "unit",
+            "Unit": requirement["Unit"],
             "Reference market rate": rate_text,
             "Typical service life": lifespan,
             "Estimated weight (kg)": round(weight),
@@ -1067,19 +1159,23 @@ def _run(project):
         else "Large truck"
     )
 
-    vehicle_cost = round(distance * VEHICLE_RATES[vehicle])
-    fuel_cost = round(total_weight * 0.45)
-    loading_unloading = round(max(250, (vehicle_cost + fuel_cost) * 0.08))
-    transportation_cost = vehicle_cost + fuel_cost + loading_unloading
+    mileage = VEHICLE_SPECS[vehicle]["mileage"]
+    fuel_cost = round((distance / mileage) * FUEL_PRICE_PER_LITRE)
+    loading_unloading = round(max(250, fuel_cost * .08))
+    transportation_cost = fuel_cost + loading_unloading
 
-    additional_charges = round(
-        (renovation_cost + labour_cost + transportation_cost) * 0.05
-    )
+    additional_charges = round((core_renovation_cost + labour_cost + transportation_cost) * .05)
+    base_estimate = core_renovation_cost + labour_cost + transportation_cost + additional_charges
+    # Always apply the standard 10% contingency automatically.
+    contingency_rate = 0.10
+    project["contingency_rate"] = 10
+    contingency = round(base_estimate * contingency_rate)
     breakdown = {
-        "Material cost": round(renovation_cost),
-        "Labour cost": round(labour_cost),
-        "Transportation cost": transportation_cost,
-        "GST / additional charges": additional_charges,
+        "Core Renovation Cost": round(core_renovation_cost),
+        "Labour Cost": round(labour_cost),
+        "Transportation Cost": transportation_cost,
+        "Additional Charges": additional_charges,
+        f"Contingency ({contingency_rate:.0%})": contingency,
     }
     total = sum(breakdown.values())
 
@@ -1091,7 +1187,8 @@ def _run(project):
         "From": material_site.get("display_name", "Selected material site"),
         "To": work_site.get("display_name", "Selected work site"),
         "Estimated load weight (kg)": round(total_weight),
-        "Vehicle cost": vehicle_cost,
+        "Mileage (km/litre)": mileage,
+        "Fuel price (INR/litre)": FUEL_PRICE_PER_LITRE,
         "Fuel cost": fuel_cost,
         "Loading & unloading": loading_unloading,
         "Transportation cost": transportation_cost,
@@ -1108,7 +1205,7 @@ def _run(project):
         f"Work scope: {project['renovation']} for {project.get('work_area', project['area']):,.0f} sq ft of the current {project['area']:,.0f} sq ft house.",
         f"Exact work site: {project['city']}, {project['state']} ({project['region']}).",
         f"Material delivery route: {distance:.1f} km by road from the selected supplier/yard.",
-        f"Quality and timing: {project['material']} materials in {project['season']} season affect the planning estimate.",
+        f"Material quantities use work-specific measurements (area, pipe length or electrical points) plus wastage; the AI core reference was INR {ml_core_reference:,.0f}.",
     ]
     if project["renovation"] == "Full House Renovation":
         reasons.insert(1, "Selected full-house scope: " + ", ".join(project.get("full_scope", [])) + ".")
@@ -1122,7 +1219,8 @@ def _run(project):
         reasons.insert(1, scope_explanation)
 
     result = {
-        "renovation_cost": round(renovation_cost),
+        "renovation_cost": round(core_renovation_cost),
+        "ml_core_reference": round(ml_core_reference),
         "labour_cost": round(labour_cost),
         "duration": max(1, round(forecast["duration"] * scope_factor)),
         "breakdown": breakdown,
@@ -1157,8 +1255,9 @@ def _reset():
 
 def show():
     _init()
-    st.title("Create a new estimate")
-    st.caption("Choose the renovation first. Your exact work-site location later provides the state, city and region automatically.")
+    st.markdown("<div class='eyebrow'>A guided renovation plan</div>", unsafe_allow_html=True)
+    st.title("Create your renovation estimate")
+    st.markdown("<div class='planning-callout'><strong>Designed around your real work.</strong> Add the measurements, points and material requirements that matter—then let the planner organise the cost, delivery and timeline.</div>", unsafe_allow_html=True)
 
     # Step 1: renovation selection decides which requirements are shown next.
     if st.session_state.flow_step == 1:
@@ -1168,7 +1267,7 @@ def show():
         current = st.session_state.project.get("renovation")
         idx = RENOVATION_OPTIONS.index(current) if current in RENOVATION_OPTIONS else None
         selected = st.selectbox("Renovation type", RENOVATION_OPTIONS, index=idx, placeholder="Select renovation type")
-        if st.button("Continue →", type="primary", use_container_width=True):
+        if st.button("Continue →", type="primary", width='stretch'):
             if not selected:
                 st.error("Please select a renovation type first.")
             else:
@@ -1189,13 +1288,13 @@ def show():
 
     left, right = st.columns(2)
     with left:
-        if st.button("← Back", use_container_width=True):
+        if st.button("← Back", width='stretch'):
             st.session_state.flow_step -= 1
             st.rerun()
 
     with right:
         if st.session_state.flow_step < 5:
-            if st.button("Continue →", type="primary", use_container_width=True):
+            if st.button("Continue →", type="primary", width='stretch'):
                 if st.session_state.flow_step == 4:
                     if _location_complete():
                         st.session_state.flow_step += 1
@@ -1204,13 +1303,22 @@ def show():
                         st.error("Please confirm both the exact work-site and the material supplier location before continuing.")
                 elif st.session_state.flow_step == 3 and st.session_state.project.get("renovation") == "Full House Renovation" and not st.session_state.get("req_full_scope"):
                     st.error("Please select at least one part of the house that needs renovation.")
+                elif st.session_state.flow_step == 3:
+                    valid, message = _work_specific_valid(st.session_state.project.get("renovation"), st.session_state.project)
+                    if not _complete(fields):
+                        st.error("Please complete all required fields before continuing.")
+                    elif valid:
+                        st.session_state.flow_step += 1
+                        st.rerun()
+                    else:
+                        st.error(message)
                 elif _complete(fields):
                     st.session_state.flow_step += 1
                     st.rerun()
                 else:
                     st.error("Please complete all required fields before continuing.")
         else:
-            if st.button("🤖 Run AI prediction", type="primary", use_container_width=True):
+            if st.button("🤖 Run AI prediction", type="primary", width='stretch'):
                 if not _complete(fields):
                     st.error("Complete the budget preferences before predicting.")
                     return
@@ -1231,11 +1339,74 @@ def show():
 def show_results(section):
     _init()
     result, project = st.session_state.prediction_result, st.session_state.project
+    if section == "projects":
+        st.title("My projects")
+        if project and result:
+            name = st.text_input("Project name", value=f"{project.get('renovation', 'Renovation')} plan")
+            if st.button("Save current estimate as project", type="primary"):
+                create_project(st.session_state.username, name, {"project": project, "result": result})
+                st.success("Project saved.")
+        saved = get_projects(st.session_state.username)
+        if saved:
+            st.dataframe(pd.DataFrame([{"Project": x["name"], "Created": x["created_at"][:10], "ID": x["id"]} for x in saved]), hide_index=True, width='stretch')
+        else: st.info("Save an estimate here to track its expenses and contractor quotes.")
+        return
+    saved_projects = get_projects(st.session_state.username)
+    if section in {"expenses", "quotes"}:
+        st.title("Expense tracking" if section == "expenses" else "Contractor quote comparison")
+        if not saved_projects:
+            st.info("Save a project first in My Projects."); return
+        ids = [p["id"] for p in saved_projects]
+        chosen = st.selectbox("Project", ids, format_func=lambda ident: next(p["name"] for p in saved_projects if p["id"] == ident))
+        if section == "expenses":
+            st.title("Track actual project spending")
+            st.caption("Record money you have actually spent during the renovation. These entries are separate from the AI estimate and do not change the predicted project cost.")
+            st.info("💡 Use this page like a simple renovation expense diary: add each payment for materials, labour, transport or other work. Keep bills/receipts separately for verification.")
+            with st.form("expense_form", clear_on_submit=True):
+                category = st.selectbox("What did you pay for?", ["Materials", "Labour", "Transportation", "Additional charges", "Other"])
+                amount = st.number_input("Amount paid (INR)", min_value=1.0, value=None, step=100.0, placeholder="Enter amount")
+                expense_date = st.date_input("Payment date")
+                note = st.text_input("Short note", placeholder="e.g. Cement purchase, electrician advance")
+                if st.form_submit_button("Add spending"):
+                    if amount is not None:
+                        add_expense(st.session_state.username, chosen, category, amount, expense_date, note)
+                        st.rerun()
+                    st.error("Enter the amount you actually paid.")
+
+            expenses = get_expenses(st.session_state.username, chosen)
+            total_spent = sum(float(x.get("amount", 0) or 0) for x in expenses)
+            project_budget = float(next((p.get("budget", 0) for p in saved_projects if p["id"] == chosen), 0) or 0)
+            m1, m2 = st.columns(2)
+            m1.metric("Spent so far", f"INR {total_spent:,.0f}")
+            if project_budget > 0:
+                remaining = project_budget - total_spent
+                label = "Budget remaining" if remaining >= 0 else "Over budget by"
+                m2.metric(label, f"INR {abs(remaining):,.0f}")
+            else:
+                m2.metric("Entries recorded", len(expenses))
+
+            if expenses:
+                display = pd.DataFrame(expenses)[["expense_date", "category", "amount", "note"]].rename(columns={
+                    "expense_date": "Date", "category": "Category", "amount": "Amount paid (INR)", "note": "Note"
+                })
+                st.subheader("Spending history")
+                st.dataframe(display.style.format({"Amount paid (INR)": "INR {:,.0f}"}), hide_index=True, width='stretch')
+            else:
+                st.success("No spending recorded yet. Add your first actual payment above.")
+        else:
+            with st.form("quote_form", clear_on_submit=True):
+                contractor=st.text_input("Contractor name"); amount=st.number_input("Quoted amount (INR)",min_value=1.0,step=1000.0); days=st.number_input("Duration (days)",min_value=1,step=1); warranty=st.text_input("Warranty / terms"); note=st.text_input("Notes")
+                if st.form_submit_button("Add quote"):
+                    if contractor.strip(): add_quote(st.session_state.username, chosen, contractor, amount, days, warranty, note); st.rerun()
+                    else: st.error("Enter the contractor name.")
+            quotes=get_quotes(st.session_state.username, chosen)
+            if quotes: st.dataframe(pd.DataFrame(quotes)[["contractor_name", "amount", "duration_days", "warranty", "note"]].rename(columns={"contractor_name":"Contractor", "amount":"Quote (INR)", "duration_days":"Days"}), hide_index=True, width='stretch')
+        return
     if section == "history":
         st.title("Prediction history")
         rows = get_prediction_history(st.session_state.username)
         if rows:
-            st.dataframe(pd.DataFrame([{ "Date": x["date"], "Renovation type": x["renovation_type"], "Estimated cost": f"INR {x['estimated_cost']:,.0f}", "Budget status": x["budget_status"]} for x in rows]), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame([{ "Date": x["date"], "Renovation type": x["renovation_type"], "Estimated cost": f"INR {x['estimated_cost']:,.0f}", "Budget status": x["budget_status"]} for x in rows]), hide_index=True, width='stretch')
             chosen = st.selectbox("View report again", range(len(rows)), format_func=lambda x: f"{rows[x]['date']} — {rows[x]['renovation_type']}")
             if st.button("Open selected prediction"):
                 st.session_state.project, st.session_state.prediction_result = rows[chosen]["project"], rows[chosen]["result"]
@@ -1251,15 +1422,21 @@ def show_results(section):
     tips = project_suggestions(MODEL_RENOVATION_MAP[project["renovation"]], project["season"], status, difference, result["duration"], result["breakdown"])
     relevant_materials = [item["Material"] for item in result["material_detail"]]
     if section == "overview":
-        st.title("Final results dashboard")
+        st.markdown("<div class='eyebrow'>Your renovation snapshot</div>", unsafe_allow_html=True)
+        st.title("Your plan, clearly summarised")
+        st.markdown(f"<div class='result-banner'><div class='label'>Recommended planning budget</div><div class='value'>INR {total:,.0f}</div><div class='sub'>Expected working range: INR {total*.90:,.0f} – INR {total*1.10:,.0f}</div></div>", unsafe_allow_html=True)
         a, b, c = st.columns(3)
-        a.metric("Estimated renovation cost", f"INR {result['renovation_cost']:,.0f}")
+        a.metric("Core renovation cost", f"INR {result['renovation_cost']:,.0f}")
         b.metric("Labour cost", f"INR {result['labour_cost']:,.0f}")
         c.metric("Transportation cost", f"INR {result['logistics']['Transportation cost']:,.0f}")
         d, e, f = st.columns(3)
-        d.metric("Total estimated cost", f"INR {result['total']:,.0f}")
+        d.metric("Total estimated budget", f"INR {result['total']:,.0f}")
         e.metric("Project duration", f"{result['duration']} days")
         f.metric("Budget status", status, f"INR {abs(difference):,.0f} {'remaining' if status == 'Within Budget' else 'over budget'}")
+        contingency_amount = result["breakdown"].get("Contingency (10%)", 0)
+        base_estimate = total - contingency_amount
+        st.info(f"💡 **Contingency reserve: 10% automatically included — INR {contingency_amount:,.0f}.** This is a safety amount kept aside for unexpected renovation costs. It is calculated on the full base estimate (renovation + labour + transportation + additional charges).")
+        st.caption(f"**Final estimated budget = Base estimate INR {base_estimate:,.0f} + Contingency INR {contingency_amount:,.0f} = INR {total:,.0f}.**")
         st.subheader("Budget health")
         usage = total / budget
         health = "Excellent" if usage <= .75 else "Good" if usage <= .9 else "Average" if usage <= 1 else "High Risk"
@@ -1271,17 +1448,18 @@ def show_results(section):
         st.subheader("Why this estimate?")
         for reason in result.get("reasons", []):
             st.write(f"- {reason}")
-        st.caption("Materials and labour come from the AI estimate. Transportation uses the selected material-site to work-site road route and the predicted material load.")
+        st.caption("**Why is contingency included?** Renovation costs can change because of hidden repairs, material price changes or extra work. A 10% reserve is automatically kept aside so the budget is safer and more realistic.\n\nThis estimate is generated for preliminary renovation planning. Actual costs may vary based on site conditions, local market prices, contractor charges, and material availability.")
         st.info("Open Cost Breakdown, Transportation, Material Comparison and AI Suggestions from the sidebar for the detailed planning views.")
     elif section == "costs":
         st.title("Detailed cost breakdown")
         st.caption("Every estimate is separated into materials, labour, transport and statutory charges so you can review the plan before speaking with a contractor.")
 
         category_notes = {
-            "Material cost": "Core materials required for the selected renovation work",
-            "Labour cost": "Skilled workers, helpers and finishing work",
-            "Transportation cost": "Vehicle and estimated load movement to site",
-            "GST / additional charges": "Estimated taxes and additional project charges",
+            "Core Renovation Cost": "Physical material quantities calculated from work area, requirement and wastage",
+            "Labour Cost": "Skilled workers, helpers and finishing work",
+            "Transportation Cost": "Fuel for the supplier-to-site route plus loading and unloading",
+            "Additional Charges": "Estimated taxes and additional project charges",
+            "Contingency (10%)": "10% safety reserve on the full base estimate for unexpected renovation costs",
         }
         frame = pd.DataFrame(result["breakdown"].items(), columns=["Cost category", "Amount (INR)"])
         frame["Share of total"] = frame["Amount (INR)"].div(total).map(lambda amount: f"{amount:.1%}")
@@ -1290,7 +1468,7 @@ def show_results(section):
         st.dataframe(
             frame.style.format({"Amount (INR)": "INR {:,.0f}"}),
             hide_index=True,
-            use_container_width=True,
+            width='stretch',
         )
 
         st.subheader("Material-wise estimate")
@@ -1301,13 +1479,13 @@ def show_results(section):
         materials = pd.DataFrame(result["material_detail"]).copy()
         materials = materials[[
             "Material", "Why included", "Recommended brand / company",
-            "Estimated quantity", "Unit", "Reference market rate",
+            "Base quantity", "Wastage", "Estimated quantity", "Unit", "Reference market rate",
             "Estimated material cost (INR)"
         ]]
         st.dataframe(
-            materials.style.format({"Estimated quantity": "{:,.1f}", "Estimated material cost (INR)": "INR {:,.0f}"}),
+            materials.style.format({"Base quantity": "{:,.1f}", "Estimated quantity": "{:,.1f}", "Estimated material cost (INR)": "INR {:,.0f}"}),
             hide_index=True,
-            use_container_width=True,
+            width='stretch',
         )
 
         st.subheader("Labour and site work")
@@ -1317,14 +1495,14 @@ def show_results(section):
             ("General site labour", "Helpers, preparation, cleaning and material handling", round(result["labour_cost"] * .30)),
             ("Final inspection and completion", "Site coordination, quality check and work completion before the contractor leaves", result["labour_cost"] - round(result["labour_cost"] * .55) - round(result["labour_cost"] * .30)),
         ], columns=["Labour section", "What this includes", "Amount (INR)"])
-        st.dataframe(labour_rows.style.format({"Amount (INR)": "INR {:,.0f}"}), hide_index=True, use_container_width=True)
+        st.dataframe(labour_rows.style.format({"Amount (INR)": "INR {:,.0f}"}), hide_index=True, width='stretch')
 
         st.subheader("Transport and statutory charges")
         logistics_rows = pd.DataFrame([
             ("Transportation", f"{result['logistics']['From']} → {result['logistics']['To']} · {result['logistics']['Recommended vehicle']} · {result['logistics']['Estimated delivery distance (km)']} km planning route", result["logistics"]["Transportation cost"]),
-            ("GST / additional charges", "Estimated taxes and additional project charges", result["breakdown"]["GST / additional charges"]),
+            ("Additional Charges", "Estimated taxes and additional project charges", result["breakdown"]["Additional Charges"]),
         ], columns=["Charge", "What this includes", "Amount (INR)"])
-        st.dataframe(logistics_rows.style.format({"Amount (INR)": "INR {:,.0f}"}), hide_index=True, use_container_width=True)
+        st.dataframe(logistics_rows.style.format({"Amount (INR)": "INR {:,.0f}"}), hide_index=True, width='stretch')
 
         with st.expander("View cost chart", expanded=False):
             chart = px.bar(
@@ -1338,7 +1516,7 @@ def show_results(section):
             chart.update_layout(showlegend=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=10, r=10, t=20, b=10))
             chart.update_xaxes(title=None, tickangle=-20)
             chart.update_yaxes(title="Amount (INR)", gridcolor="#dfe6f1")
-            st.plotly_chart(chart, use_container_width=True)
+            st.plotly_chart(chart, width='stretch')
     elif section == "transportation":
         st.title("Transportation cost")
         st.caption("A clear logistics estimate from the confirmed material supplier (**FROM**) to the confirmed work-site (**TO**), using road distance, predicted material load and a suitable vehicle.")
@@ -1349,13 +1527,16 @@ def show_results(section):
         c.metric("📦 Estimated material load", f"{logistics['Estimated load weight (kg)']:,} kg")
         st.subheader("Transportation breakdown")
         logistics_rows = pd.DataFrame([
-            ("🚚 Vehicle cost", logistics.get("Vehicle cost", round(logistics["Transportation cost"] * .55))),
-            ("⛽ Fuel cost", logistics.get("Fuel cost", round(logistics["Transportation cost"] * .37))),
+            ("📍 Distance", f"{logistics['Estimated delivery distance (km)']:.1f} km"),
+            ("🚚 Vehicle type", logistics["Recommended vehicle"]),
+            ("⛽ Mileage", f"{logistics['Mileage (km/litre)']} km/litre"),
+            ("⛽ Fuel price", f"INR {logistics['Fuel price (INR/litre)']:.0f}/litre"),
+            ("📦 Load", f"{logistics['Estimated load weight (kg)']:,} kg"),
+            ("⛽ Fuel: distance ÷ mileage × fuel price", logistics["Fuel cost"]),
             ("📦 Loading & unloading", logistics.get("Loading & unloading", logistics["Transportation cost"] - round(logistics["Transportation cost"] * .55) - round(logistics["Transportation cost"] * .37))),
             ("💰 Total transportation cost", logistics["Transportation cost"]),
-            ("Total transport cost", logistics["Total logistics cost"]),
-        ], columns=["Item", "Amount (INR)"])
-        st.dataframe(logistics_rows.style.format({"Amount (INR)": "INR {:,.0f}"}), hide_index=True, use_container_width=True)
+        ], columns=["Item", "Amount / detail"])
+        st.dataframe(logistics_rows, hide_index=True, width='stretch')
         st.info(
             f"**FROM:** {logistics['From']}  →  **TO:** {logistics['To']}  ·  "
             f"**{logistics['Estimated delivery distance (km)']:.1f} km**  ·  "
@@ -1387,7 +1568,7 @@ def show_results(section):
                     folium.PolyLine(points, weight=4, opacity=0.8).add_to(route_map)
                 else:
                     folium.PolyLine([[supplier_lat, supplier_lon], [work_lat, work_lon]], weight=3, opacity=0.7, dash_array="8, 8").add_to(route_map)
-                st_folium(route_map, height=360, use_container_width=True, key="transport_route_map")
+                st_folium(route_map, height=360, width='stretch', key="transport_route_map")
         except ImportError:
             st.caption("Route map requires folium and streamlit-folium.")
 
@@ -1401,7 +1582,7 @@ def show_results(section):
                 }
                 for item in result["material_detail"]
             ])
-            st.dataframe(load_rows.style.format({"Calculated load (kg)": "{:,.0f}"}), hide_index=True, use_container_width=True)
+            st.dataframe(load_rows.style.format({"Calculated load (kg)": "{:,.0f}"}), hide_index=True, width='stretch')
             st.caption("Total material load = the sum of each estimated quantity multiplied by its standard planning weight. This total determines the recommended vehicle and fuel allowance.")
         st.caption("This is a planning estimate; final supplier and vehicle charges can vary by route and local availability.")
     elif section == "material_prices":
@@ -1411,7 +1592,7 @@ def show_results(section):
         for item in result["material_detail"]:
             name = item["Material"]
             price_rows.append({**item, "Planning rate": item.get("Reference market rate", "—")})
-        st.dataframe(pd.DataFrame(price_rows).style.format({"Estimated material cost (INR)": "{:,.0f}", "Estimated quantity": "{:,.1f}", "Estimated weight (kg)": "{:,.0f}"}), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(price_rows).style.format({"Estimated material cost (INR)": "{:,.0f}", "Estimated quantity": "{:,.1f}", "Estimated weight (kg)": "{:,.0f}"}), hide_index=True, width='stretch')
         st.info("Useful next step: show this table to two local suppliers, compare their quotations, then use Material Comparison to choose the best value option.")
     elif section == "materials":
         st.title("Material comparison")
@@ -1440,11 +1621,27 @@ def show_results(section):
             "Full House Renovation": [("Phase 1", "Survey, demolition and structural preparation"), ("Phase 2", "Services and core renovation work"), ("Phase 3", "Finishes, fittings and final inspection")],
         }
         timeline = pd.DataFrame(timeline_templates.get(project["renovation"], timeline_templates["Full House Renovation"]), columns=["Period", "Activity"])
-        st.dataframe(timeline, hide_index=True, use_container_width=True)
+        st.dataframe(timeline, hide_index=True, width='stretch')
         st.subheader("Maintenance planning")
-        maintenance = max(5_000, round(result["total"] * .025))
-        st.metric("Estimated annual maintenance reserve", f"INR {maintenance:,.0f}")
-        st.caption("Material-specific service-life ranges are shown once in the Recommended Materials table to avoid conflicting duplicate lifespan values.")
+        maintenance_rates = {
+            "Painting": (0.015, "Paint and surface touch-ups are typically recurring."),
+            "Flooring & Tiling": (0.012, "Routine cleaning, grout care and occasional tile replacement are the main needs."),
+            "Electrical Work": (0.020, "Periodic checks, switches, fixtures and minor electrical replacements may be needed."),
+            "Plumbing": (0.025, "Leak checks, fittings, seals and minor pipe repairs can recur over time."),
+            "Bathroom Renovation": (0.030, "Bathroom fittings, seals, grout and waterproofing-related upkeep need regular attention."),
+            "Kitchen Renovation": (0.028, "Cabinet hardware, plumbing fixtures, countertop care and fittings may need upkeep."),
+            "Roofing": (0.035, "Roof inspections, waterproofing touch-ups and weather-related repairs can be significant."),
+            "Exterior Renovation": (0.025, "Exterior paint, waterproofing and weather exposure create recurring maintenance."),
+            "Interior Renovation": (0.018, "Interior finishes, fittings and minor repairs usually need moderate upkeep."),
+            "Full House Renovation": (0.025, "A whole-house renovation covers multiple systems, so a moderate maintenance reserve is used."),
+        }
+        rate, reason = maintenance_rates.get(project["renovation"], (0.025, "A moderate maintenance reserve is used for planning."))
+        maintenance = max(5_000, round(result["total"] * rate))
+        m1, m2 = st.columns(2)
+        m1.metric("Estimated annual maintenance", f"INR {maintenance:,.0f}", f"{rate:.1%} of estimated budget")
+        m2.metric("Renovation type", project["renovation"])
+        st.caption(f"**Why this rate?** {reason} This is a planning reserve, not a guaranteed yearly expense. Actual maintenance depends on usage, material quality, age and site conditions.")
+        st.caption("Material-specific service-life ranges are shown in the Recommended Materials table.")
     elif section == "report":
         report = {"User": st.session_state.username, "House Details": f"{project['area']:,.0f} sq ft", "Renovation Type": project["renovation"], "Location": f"{project['city']}, {project['state']}", "Available Budget": budget, "Renovation Cost": result["renovation_cost"], "Labour Cost": result["labour_cost"], "Transportation Cost": result["logistics"]["Transportation cost"], "Total Cost": total, "Estimated Duration (Days)": result["duration"], "Budget Status": status}
         pdf = create_project_pdf(report, result["breakdown"], status, difference, suggested_quality(project["material"], status, difference), tips)
