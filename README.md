@@ -40,7 +40,6 @@ Lumina Nest is an AI-powered house renovation planning system developed to help 
 - Scikit-learn
 - XGBoost
 - Plotly
-- SHAP
 - ReportLab
 
 ## Machine Learning Models
