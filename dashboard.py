@@ -2,13 +2,19 @@ from pathlib import Path
 
 import streamlit as st
 
-st.set_page_config(page_title="Lumina Nest", page_icon="LN", layout="wide", initial_sidebar_state="expanded")
-
 from auth_page.forgot import show_forgot
+from auth_page.landing import show_landing
 from auth_page.login import show_login
 from auth_page.register import show_register
 from modules.home import show as home_page
 from modules.prediction import show as prediction_page, show_results
+
+st.set_page_config(
+    page_title="Lumina Nest",
+    page_icon="🏠",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 
 def _load_styles():
@@ -17,14 +23,14 @@ def _load_styles():
         st.markdown(f"<style>{css_file.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
 
 
-DEFAULTS = {"logged_in": False, "username": "", "full_name": "", "login_greeting": "", "page": "home", "auth_page": "login"}
+DEFAULTS = {"logged_in": False, "username": "", "full_name": "", "login_greeting": "", "page": "home", "auth_page": "landing"}
 for key, value in DEFAULTS.items():
     st.session_state.setdefault(key, value)
 
 _load_styles()
 
 if not st.session_state.logged_in:
-    {"login": show_login, "register": show_register, "forgot": show_forgot}.get(
+    {"landing": show_landing, "login": show_login, "register": show_register, "forgot": show_forgot}.get(
         st.session_state.auth_page, show_login
     )()
     st.stop()
@@ -45,13 +51,14 @@ def _navigate(label, destination, icon, reset_estimate=False):
         st.rerun()
 
 with st.sidebar:
-    st.title("Lumina Nest")
+    st.title("🏠 Lumina Nest")
     st.caption("Plan with clarity")
     st.divider()
     st.write(f"Signed in as **{st.session_state.username.title()}**")
     _navigate("Overview", "home", "◈")
     _navigate("New estimate", "prediction", "＋", reset_estimate=True)
     _navigate("My projects", "projects", "◫")
+    _navigate("Profile", "profile", "◉")
     _navigate("Expense tracking", "expenses", "◷")
     _navigate("Contractor quotes", "quotes", "⚖")
     st.caption("YOUR PLAN")
@@ -92,6 +99,8 @@ elif st.session_state.page == "history":
     show_results("history")
 elif st.session_state.page == "projects":
     show_results("projects")
+elif st.session_state.page == "profile":
+    show_results("profile")
 elif st.session_state.page == "expenses":
     show_results("expenses")
 elif st.session_state.page == "quotes":

@@ -1339,6 +1339,34 @@ def show():
 def show_results(section):
     _init()
     result, project = st.session_state.prediction_result, st.session_state.project
+    if section == "profile":
+        st.markdown("<div class='eyebrow'>ACCOUNT</div>", unsafe_allow_html=True)
+        st.title("My profile")
+        st.caption("Your Lumina Nest account and current planning preferences.")
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            st.markdown("<div class='insight-card' style='text-align:center;padding:1.5rem'><div style='font-size:2.3rem;'>◉</div><div class='title'>" + str(st.session_state.get('full_name', st.session_state.username.title())) + "</div><div class='text'>@" + str(st.session_state.username) + "</div></div>", unsafe_allow_html=True)
+        with c2:
+            profile_rows = {
+                "Username": st.session_state.username,
+                "Full name": st.session_state.get("full_name", st.session_state.username.title()),
+                "Saved projects": len(get_projects(st.session_state.username)),
+                "Prediction history": len(get_prediction_history(st.session_state.username)),
+            }
+            profile_df = pd.DataFrame(profile_rows.items(), columns=["Account", "Value"])
+            profile_df["Value"] = profile_df["Value"].astype(str)
+            st.dataframe(profile_df, hide_index=True, width="stretch")
+        st.markdown("<div class='section-title'><span>⌂</span> Current plan</div>", unsafe_allow_html=True)
+        if project and result:
+            a, b, c, d = st.columns(4)
+            a.metric("Renovation", project.get("renovation", "—"))
+            b.metric("Work site", f"{project.get('city','—')}, {project.get('state','—')}")
+            c.metric("Budget", f"INR {float(project.get('budget',0) or 0):,.0f}")
+            d.metric("Estimate", f"INR {float(result.get('total',0) or 0):,.0f}")
+        else:
+            st.info("Run your first AI estimate to see your current renovation plan here.")
+        return
+
     if section == "projects":
         st.title("My projects")
         if project and result:
@@ -1394,13 +1422,81 @@ def show_results(section):
             else:
                 st.success("No spending recorded yet. Add your first actual payment above.")
         else:
+            st.markdown("<div class='quote-hero'><div class='quote-kicker'>CONTRACTOR PLANNING</div><h2>Compare contractor quotes with confidence</h2><p>Add each contractor quotation separately. Their contact details, price, duration, warranty and included work are saved for side-by-side comparison.</p></div>", unsafe_allow_html=True)
+            saved = next((p for p in saved_projects if p["id"] == chosen), None)
+            saved_result = (saved or {}).get("project", {}).get("budget", 0)
+            if not saved_result:
+                saved_result = (saved or {}).get("result", {}).get("total", 0)
+            st.markdown("<div class='quote-section-title'>Add Contractor Quote</div>", unsafe_allow_html=True)
             with st.form("quote_form", clear_on_submit=True):
-                contractor=st.text_input("Contractor name"); amount=st.number_input("Quoted amount (INR)",min_value=1.0,step=1000.0); days=st.number_input("Duration (days)",min_value=1,step=1); warranty=st.text_input("Warranty / terms"); note=st.text_input("Notes")
-                if st.form_submit_button("Add quote"):
-                    if contractor.strip(): add_quote(st.session_state.username, chosen, contractor, amount, days, warranty, note); st.rerun()
-                    else: st.error("Enter the contractor name.")
-            quotes=get_quotes(st.session_state.username, chosen)
-            if quotes: st.dataframe(pd.DataFrame(quotes)[["contractor_name", "amount", "duration_days", "warranty", "note"]].rename(columns={"contractor_name":"Contractor", "amount":"Quote (INR)", "duration_days":"Days"}), hide_index=True, width='stretch')
+                left, right = st.columns(2, gap="large")
+                with left:
+                    st.markdown("**Contractor Details**")
+                    contractor = st.text_input("Contractor / Company Name *", placeholder="e.g. ABC Renovations")
+                    contact_person = st.text_input("Contact Person *", placeholder="e.g. Arun Kumar")
+                    phone = st.text_input("Phone Number *", placeholder="10-digit phone number")
+                    email = st.text_input("Email *", placeholder="contractor@example.com")
+                    address = st.text_input("Address", placeholder="City, State")
+                    license_no = st.text_input("License / Registration No. (Optional)", placeholder="Enter license number")
+                with right:
+                    st.markdown("**Quote Details**")
+                    amount = st.number_input("Quoted Amount (INR) *", min_value=1.0, step=1000.0)
+                    days = st.number_input("Estimated Duration (days) *", min_value=1, step=1)
+                    wc1, wc2 = st.columns(2)
+                    with wc1: warranty_value = st.number_input("Warranty Period", min_value=0, step=1, value=1)
+                    with wc2: warranty_unit = st.selectbox("Warranty unit", ["Year", "Months"])
+                    materials_included = st.radio("Materials Included", ["Yes", "No"], horizontal=True)
+                    labour_included = st.radio("Labour Included", ["Yes", "No"], horizontal=True)
+                    payment_terms = st.text_input("Payment Terms *", placeholder="e.g. 40% advance, 60% after completion")
+                    note = st.text_area("Notes", placeholder="e.g. Painting and flooring included", height=85)
+                submitted = st.form_submit_button("＋  Add Quote", type="primary", width="stretch")
+                if submitted:
+                    if not contractor.strip() or not contact_person.strip() or not phone.strip() or not email.strip() or not payment_terms.strip():
+                        st.error("Please complete all fields marked *.")
+                    else:
+                        warranty = f"{warranty_value} {warranty_unit.lower()}" if warranty_value else "No warranty specified"
+                        add_quote(st.session_state.username, chosen, contractor, amount, days, warranty, note, contact_person, phone, email, address, license_no, materials_included == "Yes", labour_included == "Yes", payment_terms)
+                        st.rerun()
+
+            quotes = get_quotes(st.session_state.username, chosen)
+            if quotes:
+                st.markdown("<div class='quote-section-title'>Saved Contractor Quotes</div>", unsafe_allow_html=True)
+                rows = []
+                for q in quotes:
+                    rows.append({
+                        "Contractor / Company": q.get("contractor_name", "—"),
+                        "Contact Person": q.get("contact_person", "—"),
+                        "Phone": q.get("phone", "—"),
+                        "Email": q.get("email", "—"),
+                        "Quote (INR)": f"₹ {float(q.get('amount', 0)):,.0f}",
+                        "Duration": f"{q.get('duration_days', 0)} days",
+                        "Warranty": q.get("warranty", "—"),
+                        "Materials": "Yes" if q.get("materials_included", False) else "No",
+                        "Labour": "Yes" if q.get("labour_included", False) else "No",
+                        "Payment Terms": q.get("payment_terms", "—"),
+                        "Address": q.get("address", "—"),
+                        "Notes": q.get("note", "—"),
+                    })
+                st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
+
+                lowest = min(quotes, key=lambda q: float(q.get("amount", 0)))
+                fastest = min(quotes, key=lambda q: int(q.get("duration_days", 999999)))
+                def warranty_months(q):
+                    text = str(q.get("warranty", "")).lower()
+                    nums = re.findall(r"\d+", text)
+                    if not nums: return 0
+                    n = int(nums[0])
+                    return n * 12 if "year" in text else n
+                best_warranty = max(quotes, key=warranty_months)
+                st.markdown("<div class='quote-compare-title'>Quick Comparison</div>", unsafe_allow_html=True)
+                q1, q2, q3 = st.columns(3)
+                q1.metric("Lowest Quote", f"₹ {float(lowest.get('amount',0)):,.0f}", lowest.get("contractor_name", "—"))
+                q2.metric("Shortest Duration", f"{int(fastest.get('duration_days',0))} days", fastest.get("contractor_name", "—"))
+                q3.metric("Best Warranty", best_warranty.get("warranty", "—"), best_warranty.get("contractor_name", "—"))
+                if saved_result:
+                    st.info(f"AI estimated project budget: ₹ {float(saved_result):,.0f}. Compare each quotation with this estimate, but confirm scope and site conditions before selecting a contractor.")
+            else:
+                st.info("No contractor quotes added yet. Add the first quotation above, then use the same form for the next contractor.")
         return
     if section == "history":
         st.title("Prediction history")
@@ -1445,7 +1541,18 @@ def show_results(section):
             st.error(f"Your estimated project total is INR {total:,.0f}, which is INR {difference:,.0f} more than your INR {budget:,.0f} budget.")
         else:
             st.success(f"Your estimated project total is INR {total:,.0f}, leaving INR {difference:,.0f} within your INR {budget:,.0f} budget.")
-        st.subheader("Why this estimate?")
+        st.markdown("<div class='section-title'><span>✦</span> AI insights</div>", unsafe_allow_html=True)
+        insight_cols = st.columns(3)
+        insights = [
+            ("Budget", f"{usage * 100:.0f}% of your available budget is used."),
+            ("Materials", f"{len(result.get('material_detail', []))} renovation-specific material categories were calculated."),
+            ("Transport", f"{result['logistics']['Estimated delivery distance (km)']:.1f} km supplier-to-site planning route."),
+        ]
+        for col, (title, text) in zip(insight_cols, insights):
+            with col:
+                st.markdown(f"<div class='insight-card'><div class='icon'>✦</div><div class='title'>{title}</div><div class='text'>{text}</div></div>", unsafe_allow_html=True)
+
+        st.markdown("<div class='section-title'><span>?</span> Why this estimate</div>", unsafe_allow_html=True)
         for reason in result.get("reasons", []):
             st.write(f"- {reason}")
         st.caption("**Why is contingency included?** Renovation costs can change because of hidden repairs, material price changes or extra work. A 10% reserve is automatically kept aside so the budget is safer and more realistic.\n\nThis estimate is generated for preliminary renovation planning. Actual costs may vary based on site conditions, local market prices, contractor charges, and material availability.")
@@ -1525,6 +1632,13 @@ def show_results(section):
         a.metric("📍 Region", logistics.get("Region type", project["region"]))
         b.metric("🚚 Recommended vehicle", logistics["Recommended vehicle"])
         c.metric("📦 Estimated material load", f"{logistics['Estimated load weight (kg)']:,} kg")
+        st.markdown("<div class='section-title'><span>↔</span> Material journey</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div class='result-banner'><div class='label'>SUPPLIER → WORK SITE</div>"
+            f"<div class='value'>{logistics['From']} → {logistics['To']}</div>"
+            f"<div class='sub'>{logistics['Estimated delivery distance (km)']:.1f} km · {logistics.get('Estimated travel time', logistics.get('Estimated travel time (min)', 0)):.0f} min · {logistics['Recommended vehicle']} · INR {logistics['Transportation cost']:,.0f}</div></div>",
+            unsafe_allow_html=True,
+        )
         st.subheader("Transportation breakdown")
         logistics_rows = pd.DataFrame([
             ("📍 Distance", f"{logistics['Estimated delivery distance (km)']:.1f} km"),
@@ -1536,6 +1650,7 @@ def show_results(section):
             ("📦 Loading & unloading", logistics.get("Loading & unloading", logistics["Transportation cost"] - round(logistics["Transportation cost"] * .55) - round(logistics["Transportation cost"] * .37))),
             ("💰 Total transportation cost", logistics["Transportation cost"]),
         ], columns=["Item", "Amount / detail"])
+        logistics_rows["Amount / detail"] = logistics_rows["Amount / detail"].astype(str)
         st.dataframe(logistics_rows, hide_index=True, width='stretch')
         st.info(
             f"**FROM:** {logistics['From']}  →  **TO:** {logistics['To']}  ·  "
@@ -1642,6 +1757,14 @@ def show_results(section):
         m2.metric("Renovation type", project["renovation"])
         st.caption(f"**Why this rate?** {reason} This is a planning reserve, not a guaranteed yearly expense. Actual maintenance depends on usage, material quality, age and site conditions.")
         st.caption("Material-specific service-life ranges are shown in the Recommended Materials table.")
+        st.markdown("<div class='section-title'><span>☼</span> Seasonal planning</div>", unsafe_allow_html=True)
+        seasonal = {
+            "Summer": ("Best for dry-site work", "Prioritise painting, exterior finishing and curing-sensitive work."),
+            "Monsoon": ("Plan around rainfall", "Prioritise waterproofing, drainage and indoor work; protect stored materials."),
+            "Winter": ("Comfortable working window", "Good for general renovation; keep material storage dry and organised."),
+        }
+        season_title, season_text = seasonal.get(project.get("season"), ("Seasonal note", "Use the selected season as a planning factor and confirm local site conditions."))
+        st.markdown(f"<div class='insight-card'><div class='icon'>☼</div><div class='title'>{season_title}</div><div class='text'>{season_text}</div></div>", unsafe_allow_html=True)
     elif section == "report":
         report = {"User": st.session_state.username, "House Details": f"{project['area']:,.0f} sq ft", "Renovation Type": project["renovation"], "Location": f"{project['city']}, {project['state']}", "Available Budget": budget, "Renovation Cost": result["renovation_cost"], "Labour Cost": result["labour_cost"], "Transportation Cost": result["logistics"]["Transportation cost"], "Total Cost": total, "Estimated Duration (Days)": result["duration"], "Budget Status": status}
         pdf = create_project_pdf(report, result["breakdown"], status, difference, suggested_quality(project["material"], status, difference), tips)

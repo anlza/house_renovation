@@ -45,8 +45,8 @@ def get_projects(username): return [x for x in _load()["projects"] if x["usernam
 def add_expense(username,project_id,category,amount,expense_date,note):
     data=_load(); data["expenses"].append({"id":_id(data,"expenses"),"username":username.strip().lower(),"project_id":project_id,"category":category,"amount":float(amount),"expense_date":str(expense_date),"note":note,"created_at":_stamp()}); _save(data)
 def get_expenses(username,project_id=None): return [x for x in _load()["expenses"] if x["username"]==username.strip().lower() and (not project_id or x["project_id"]==project_id)][::-1]
-def add_quote(username,project_id,contractor_name,amount,duration_days,warranty,note):
-    data=_load(); data["quotes"].append({"id":_id(data,"quotes"),"username":username.strip().lower(),"project_id":project_id,"contractor_name":contractor_name,"amount":float(amount),"duration_days":int(duration_days),"warranty":warranty,"note":note,"created_at":_stamp()}); _save(data)
+def add_quote(username,project_id,contractor_name,amount,duration_days,warranty,note,contact_person="",phone="",email="",address="",license_no="",materials_included=True,labour_included=True,payment_terms=""):
+    data=_load(); data["quotes"].append({"id":_id(data,"quotes"),"username":username.strip().lower(),"project_id":project_id,"contractor_name":contractor_name.strip(),"contact_person":contact_person.strip(),"phone":phone.strip(),"email":email.strip(),"address":address.strip(),"license_no":license_no.strip(),"amount":float(amount),"duration_days":int(duration_days),"warranty":warranty.strip(),"materials_included":bool(materials_included),"labour_included":bool(labour_included),"payment_terms":payment_terms.strip(),"note":note.strip(),"created_at":_stamp()}); _save(data)
 def get_quotes(username,project_id=None): return sorted([x for x in _load()["quotes"] if x["username"]==username.strip().lower() and (not project_id or x["project_id"]==project_id)],key=lambda x:x["amount"])
 def begin_password_reset(username):
     data=_load(); user=_user(data,username)
