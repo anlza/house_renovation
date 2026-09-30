@@ -1,0 +1,2 @@
+Model,Accuracy,Precision_Macro,Recall_Macro,F1_Macro,Threshold,Within_Budget_Recall,Within_Budget_F1
+Random Forest - Budget Status,0.833,0.8801,0.7816,0.801,0.61,0.5756,0.7212

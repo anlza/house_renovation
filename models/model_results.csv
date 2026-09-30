@@ -1,0 +1,4 @@
+Model,MAE,RMSE,MAPE,R2
+Random Forest - Cost,102484.85,143795.82,33.64,0.8339
+Random Forest - Labour,70606.53,100647.89,34.45,0.8377
+Random Forest - Duration,6.64,8.88,11.43,0.8358

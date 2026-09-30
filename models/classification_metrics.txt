@@ -1,0 +1,16 @@
+Lumina Nest — Budget Status Classification
+Algorithm: Random Forest Classifier
+Target: Budget_Status (Within Budget / Over Budget)
+Test split: stratified 80/20, random_state=42
+Classification threshold: 0.61
+Accuracy: 83.30%
+Precision (Macro): 88.01%
+Recall (Macro): 78.16%
+F1 Score (Macro): 80.10%
+
+Confusion Matrix:
+Actual Within Budget -> Predicted Within Budget: 864; Predicted Over Budget: 637
+Actual Over Budget   -> Predicted Within Budget: 31; Predicted Over Budget: 2468
+
+Note: Macro averages give equal weight to both Budget Status classes.
+The exact quantity-based budget comparison remains the final project status in the app.
